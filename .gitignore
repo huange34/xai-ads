@@ -10,7 +10,6 @@ ENV/
 .venv
 
 # Data files
-*.json
 *.npy
 *.pkl
 *.csv
