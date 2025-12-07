@@ -1,0 +1,49 @@
+# Fly.io Docker build - exclude unnecessary files
+
+# Web frontend (deployed separately on Vercel)
+web/
+web/node_modules/
+web/.next/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test/temp files
+*.log
+*.tmp
+tests/
+
+# Documentation (not needed at runtime)
+*.md
+!requirements.txt
+
+# Large data files (if you don't need them in the container)
+# Uncomment if you want to exclude:
+# *.npy
+# scraped_data_*.json
