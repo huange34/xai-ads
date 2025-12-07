@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data files
+*.json
+*.npy
+*.pkl
+*.csv
+*.parquet
+
+# Scraped data (keep structure, ignore actual data)
+scrape/scraped_data*.json
+scrape/saved_user_ids.json
+
+# Generated graph files
+graph/*.npy
+graph/node_id_map.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Model cache
+.cache/
+models/
+*.pt
+*.pth
+*.h5

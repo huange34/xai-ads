@@ -1,0 +1,9 @@
+# Ignore scraped data files
+scraped_data.json
+load_data.py
+*.json
+
+# Ignore bearer tokens
+.env
+config.json
+
