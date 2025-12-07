@@ -3,41 +3,11 @@
 import { useState, lazy, Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import BottomTab, { SearchState } from "@/components/BottomTab";
+import ControlsPanel, { DimReductionMethod } from "@/components/ControlsPanel";
 import BuyingBehaviorPopup from "@/components/BuyingBehaviorPopup";
 
 // Lazy load the visualizer to avoid SSR issues with Three.js
 const EmbeddingVisualizer = lazy(() => import("@/components/EmbeddingVisualizer"));
-
-function GraphContent({
-  highlightedNodeIndex,
-  similarNodeIndices,
-  newEmbedding,
-  newUserInfo,
-  onPointsUpdate,
-  method,
-  onMethodChange,
-}: {
-  highlightedNodeIndex: number | null;
-  similarNodeIndices: number[];
-  newEmbedding: number[] | undefined;
-  newUserInfo: { username: string; user_id: string } | undefined;
-  onPointsUpdate: (points: any[]) => void;
-  method: "pca" | "tsne";
-  onMethodChange: (method: "pca" | "tsne") => void;
-}) {
-  return (
-    <EmbeddingVisualizer
-      highlightedNodeIndex={highlightedNodeIndex}
-      similarNodeIndices={similarNodeIndices}
-      hideHeader={true}
-      newEmbedding={newEmbedding}
-      newUserInfo={newUserInfo}
-      onPointsUpdate={onPointsUpdate}
-      method={method}
-      onMethodChange={onMethodChange}
-    />
-  );
-}
 
 interface SimilarUser {
   node_index: number;
@@ -74,11 +44,40 @@ export default function GraphPage() {
   const [newUserInfo, setNewUserInfo] = useState<{ username: string; user_id: string; profile_image_url?: string } | undefined>(undefined);
   const [points, setPoints] = useState<any[]>([]);
   const [hasAutoSearched, setHasAutoSearched] = useState(false);
-  const [method, setMethod] = useState<"pca" | "tsne">("pca");
+  const [method, setMethod] = useState<DimReductionMethod>("pca");
   const [grokState, setGrokState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [grokError, setGrokError] = useState<string | null>(null);
   const [grokTargetIndices, setGrokTargetIndices] = useState<number[]>([]);
   const [showBehaviorPopup, setShowBehaviorPopup] = useState(false);
+  const [clusterLabels, setClusterLabels] = useState<number[] | null>(null);
+  const [isClustering, setIsClustering] = useState(false);
+
+  const handleCluster = async (numClusters: number) => {
+    setIsClustering(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${apiUrl}/cluster`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ n_clusters: numClusters }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to run clustering");
+      }
+
+      const data = await response.json();
+      setClusterLabels(data.labels);
+    } catch (err) {
+      console.error("Clustering error:", err);
+    } finally {
+      setIsClustering(false);
+    }
+  };
+
+  const handleClearClusters = () => {
+    setClusterLabels(null);
+  };
 
   const handleSearch = async (handle: string): Promise<SearchResult> => {
     setSearchState("loading");
@@ -271,24 +270,19 @@ export default function GraphPage() {
           onPointsUpdate={handlePointsUpdate}
           method={method}
           onMethodChange={setMethod}
+          clusterLabels={clusterLabels}
         />
       </Suspense>
 
-      {/* Corner detail with method selector */}
-      <div className="fixed top-4 right-4 z-40">
-        <div className="bg-black/40 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-white/10 flex items-center gap-3">
-          <select
-            value={method}
-            onChange={(e) => setMethod(e.target.value as "pca" | "tsne")}
-            className="bg-transparent text-xs text-gray-400 font-mono border-none outline-none cursor-pointer hover:text-gray-300"
-          >
-            <option value="pca">PCA</option>
-            <option value="tsne">t-SNE</option>
-          </select>
-          <span className="text-xs text-gray-500 font-mono">•</span>
-          <p className="text-xs text-gray-400 font-mono">3D</p>
-        </div>
-      </div>
+      {/* Controls Panel - Algorithm selector and K-Means clustering */}
+      <ControlsPanel
+        method={method}
+        onMethodChange={setMethod}
+        onCluster={handleCluster}
+        onClearClusters={handleClearClusters}
+        clusterLabels={clusterLabels}
+        isClustering={isClustering}
+      />
 
       {/* Bottom Tab */}
       <BottomTab

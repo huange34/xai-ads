@@ -43,6 +43,7 @@ export default function BottomTab({
   const [handle, setHandle] = useState("");
   const [isGrokMode, setIsGrokMode] = useState(false);
   const [adIdea, setAdIdea] = useState("");
+  const [isMinimized, setIsMinimized] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -58,11 +59,30 @@ export default function BottomTab({
 
   return (
     <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-50 pointer-events-none">
-      <div className={`backdrop-blur-xl rounded-t-3xl border-t border-l border-r shadow-2xl p-6 pb-8 pointer-events-auto animate-slide-up transition-all ${
+      {/* Minimize/Maximize Toggle */}
+      <button
+        onClick={() => setIsMinimized(!isMinimized)}
+        className={`mx-auto flex items-center justify-center w-12 h-6 rounded-t-lg pointer-events-auto transition-all ${
+          isGrokMode 
+            ? "bg-purple-500/30 hover:bg-purple-500/40 border-purple-400/30" 
+            : "bg-white/10 hover:bg-white/20 border-white/20"
+        } border-t border-l border-r backdrop-blur-xl`}
+      >
+        <svg 
+          className={`w-4 h-4 text-gray-400 transition-transform duration-300 ${isMinimized ? "rotate-180" : ""}`}
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      <div className={`backdrop-blur-xl rounded-t-3xl border-t border-l border-r shadow-2xl pointer-events-auto animate-slide-up transition-all duration-300 ${
         isGrokMode 
           ? "bg-purple-500/20 border-purple-400/30" 
           : "bg-white/10 border-white/20"
-      }`}>
+      } ${isMinimized ? "max-h-0 p-0 overflow-hidden border-transparent" : "p-6 pb-8"}`}>
         {/* Mode Toggle */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">

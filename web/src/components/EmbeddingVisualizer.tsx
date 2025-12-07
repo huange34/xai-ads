@@ -26,9 +26,18 @@ interface EmbeddingVisualizerProps {
   hideHeader?: boolean;
   onPointsUpdate?: (points: Point[]) => void;
   onAddNewPoint?: (embedding: number[], userInfo: { username: string; user_id: string }) => void;
-  method?: "pca" | "tsne";
-  onMethodChange?: (method: "pca" | "tsne") => void;
+  method?: "pca" | "tsne" | "umap";
+  onMethodChange?: (method: "pca" | "tsne" | "umap") => void;
+  clusterLabels?: number[] | null;
 }
+
+// Cluster colors - matches ControlsPanel.tsx
+const CLUSTER_COLORS = [
+  "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7",
+  "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
+  "#F8B500", "#00CED1", "#FF69B4", "#32CD32", "#FF7F50",
+  "#9370DB", "#20B2AA", "#FFD700", "#FF4500", "#00FA9A",
+];
 
 // Avatar node with profile image
 function AvatarNode({
@@ -310,6 +319,7 @@ function ParticleCloud({
   is3D,
   highlightedNodeIndex,
   similarNodeIndices,
+  clusterLabels,
   onHover,
   onClick,
 }: {
@@ -317,6 +327,7 @@ function ParticleCloud({
   is3D: boolean;
   highlightedNodeIndex?: number | null;
   similarNodeIndices?: number[];
+  clusterLabels?: number[] | null;
   onHover?: (index: number | null, point: Point | null) => void;
   onClick?: (index: number, point: Point, event: MouseEvent) => void;
 }) {
@@ -342,12 +353,16 @@ function ParticleCloud({
   }, [highlightedNodeIndex, similarNodeIndices]);
 
   const regularPointsForInstancing = useMemo(() => {
-    return regularPoints.filter((point) => {
+    const result: { point: Point; originalIndex: number }[] = [];
+    regularPoints.forEach((point) => {
       const pointIndex = points.findIndex(p => p === point);
       // Exclude highlighted/similar points (they render individually)
       // Exclude points with user_ids (they render individually)
-      return !highlightedSet.has(pointIndex) && !point.user_id;
+      if (!highlightedSet.has(pointIndex) && !point.user_id) {
+        result.push({ point, originalIndex: pointIndex });
+      }
     });
+    return result;
   }, [regularPoints, highlightedSet, points]);
 
   // Determine if we should fade out regular nodes (when there's a highlight)
@@ -391,11 +406,8 @@ function ParticleCloud({
       if (intersects.length > 0) {
         const instanceId = intersects[0].instanceId;
         if (instanceId !== undefined && instanceId < regularPointsForInstancing.length) {
-          const hoveredPoint = regularPointsForInstancing[instanceId];
-          const originalIndex = points.findIndex(p => p === hoveredPoint);
-          if (originalIndex !== -1) {
-            hoveredPointIndex = originalIndex;
-          }
+          const { originalIndex } = regularPointsForInstancing[instanceId];
+          hoveredPointIndex = originalIndex;
         }
       }
     }
@@ -437,9 +449,9 @@ function ParticleCloud({
     if (!meshRef.current) return;
 
     const tempObject = new THREE.Object3D();
-    const color = new THREE.Color("#00aacc"); // Teal color
+    const defaultColor = new THREE.Color("#00aacc"); // Teal color
 
-    regularPointsForInstancing.forEach((point, i) => {
+    regularPointsForInstancing.forEach(({ point, originalIndex }, i) => {
       tempObject.position.set(
         point.x,
         point.y,
@@ -447,14 +459,22 @@ function ParticleCloud({
       );
       tempObject.updateMatrix();
       meshRef.current!.setMatrixAt(i, tempObject.matrix);
-      meshRef.current!.setColorAt(i, color);
+      
+      // Use cluster color if available, otherwise default teal
+      if (clusterLabels && originalIndex >= 0 && originalIndex < clusterLabels.length) {
+        const clusterIndex = clusterLabels[originalIndex];
+        const clusterColor = new THREE.Color(CLUSTER_COLORS[clusterIndex % CLUSTER_COLORS.length]);
+        meshRef.current!.setColorAt(i, clusterColor);
+      } else {
+        meshRef.current!.setColorAt(i, defaultColor);
+      }
     });
 
     meshRef.current.instanceMatrix.needsUpdate = true;
     if (meshRef.current.instanceColor) {
       meshRef.current.instanceColor.needsUpdate = true;
     }
-  }, [regularPointsForInstancing, is3D]);
+  }, [regularPointsForInstancing, is3D, clusterLabels]);
 
   return (
     <group>
@@ -466,8 +486,8 @@ function ParticleCloud({
         <sphereGeometry args={[0.12, 12, 12]} />
         <meshStandardMaterial
           vertexColors
-          emissive="#00aacc"
-          emissiveIntensity={0.8}
+          emissive={clusterLabels ? "#ffffff" : "#00aacc"}
+          emissiveIntensity={clusterLabels ? 0.5 : 0.8}
           toneMapped={false}
           transparent={shouldFadeRegular}
           opacity={shouldFadeRegular ? 0.15 : 1}
@@ -667,6 +687,7 @@ function Scene({
   is3D,
   highlightedNodeIndex,
   similarNodeIndices,
+  clusterLabels,
   onHover,
   onClick,
 }: {
@@ -674,6 +695,7 @@ function Scene({
   is3D: boolean;
   highlightedNodeIndex?: number | null;
   similarNodeIndices?: number[];
+  clusterLabels?: number[] | null;
   onHover?: (index: number | null, point: Point | null) => void;
   onClick?: (index: number, point: Point, event: MouseEvent) => void;
 }) {
@@ -693,6 +715,7 @@ function Scene({
         is3D={is3D}
         highlightedNodeIndex={highlightedNodeIndex}
         similarNodeIndices={similarNodeIndices}
+        clusterLabels={clusterLabels}
         onHover={onHover}
         onClick={onClick}
       />
@@ -731,13 +754,14 @@ export default function EmbeddingVisualizer({
   onAddNewPoint,
   method: externalMethod,
   onMethodChange,
+  clusterLabels,
 }: EmbeddingVisualizerProps) {
   const [points, setPoints] = useState<Point[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [internalMethod, setInternalMethod] = useState<"pca" | "tsne">("pca");
+  const [internalMethod, setInternalMethod] = useState<"pca" | "tsne" | "umap">("pca");
   const method = externalMethod ?? internalMethod;
-  const setMethod = (newMethod: "pca" | "tsne") => {
+  const setMethod = (newMethod: "pca" | "tsne" | "umap") => {
     if (onMethodChange) {
       onMethodChange(newMethod);
     } else {
@@ -980,6 +1004,7 @@ export default function EmbeddingVisualizer({
               is3D={dimensions === 3}
               highlightedNodeIndex={highlightedNodeIndex}
               similarNodeIndices={similarNodeIndices}
+              clusterLabels={clusterLabels}
               onHover={handleHover}
             />
           </Canvas>

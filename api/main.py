@@ -278,9 +278,21 @@ async def generate_embeddings_batch(usernames: List[str]):
 
 class VisualizationRequest(BaseModel):
     """Request model for visualization data."""
-    method: str = Field(default="pca", description="Dimensionality reduction method: 'pca' or 'tsne'")
+    method: str = Field(default="pca", description="Dimensionality reduction method: 'pca', 'tsne', or 'umap'")
     dimensions: int = Field(default=3, ge=2, le=3, description="Output dimensions: 2 or 3")
     include_new_embedding: Optional[List[float]] = Field(default=None, description="Optional new embedding to include")
+
+
+class ClusterRequest(BaseModel):
+    """Request model for K-Means clustering."""
+    n_clusters: int = Field(default=5, ge=2, le=20, description="Number of clusters for K-Means")
+
+
+class ClusterResponse(BaseModel):
+    """Response with cluster labels."""
+    labels: List[int]
+    n_clusters: int
+    total_points: int
 
 
 class VisualizationPoint(BaseModel):
@@ -355,6 +367,12 @@ async def get_visualization_data(request: VisualizationRequest):
         perplexity = min(30, embeddings.shape[0] - 1)
         reducer = TSNE(n_components=n_components, perplexity=perplexity, random_state=42)
         projected = reducer.fit_transform(embeddings)
+    elif request.method.lower() == "umap":
+        # UMAP (good balance of speed and quality)
+        import umap
+        n_neighbors = min(15, embeddings.shape[0] - 1)
+        reducer = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, random_state=42)
+        projected = reducer.fit_transform(embeddings)
     else:
         # PCA (fast, default)
         reducer = PCA(n_components=n_components, random_state=42)
@@ -400,6 +418,37 @@ async def get_visualization_data(request: VisualizationRequest):
         method=request.method.lower(),
         dimensions=n_components,
         total_points=len(points)
+    )
+
+
+@app.post("/cluster", response_model=ClusterResponse)
+async def run_kmeans_clustering(request: ClusterRequest):
+    """
+    Run K-Means clustering on the user embeddings.
+    
+    Returns cluster labels for each user.
+    """
+    from sklearn.cluster import KMeans
+    
+    # Load existing embeddings
+    node_features_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "user_embeddingsv2.npy"
+    )
+    
+    if not os.path.exists(node_features_path):
+        raise HTTPException(status_code=404, detail="user_embeddingsv2.npy not found")
+    
+    embeddings = np.load(node_features_path)
+    
+    # Run K-Means clustering
+    kmeans = KMeans(n_clusters=request.n_clusters, random_state=42, n_init=10)
+    labels = kmeans.fit_predict(embeddings)
+    
+    return ClusterResponse(
+        labels=labels.tolist(),
+        n_clusters=request.n_clusters,
+        total_points=len(labels)
     )
 
 
