@@ -88,7 +88,3 @@ final_weight = 0.2 × follow_w + 0.3 × interaction_w + 0.5 × similarity_w
 - `graph/edge_weight.npy`: (E,) - Edge weights
 - `graph/node_id_map.json`: User ID to node index mapping
 
-## License
-
-MIT
-
