@@ -158,8 +158,8 @@ function AvatarNode({
         <meshStandardMaterial
           ref={materialRef}
           map={textureRef.current || null}
-          emissive={isHighlighted ? "#00ffff" : isSimilar ? "#00ffaa" : "#00aacc"}
-          emissiveIntensity={isHighlighted ? 0.5 : isSimilar ? 0.3 : 0.2}
+          emissive={isHighlighted ? "#00ff88" : isSimilar ? "#ff6b9d" : "#00aacc"}
+          emissiveIntensity={isHighlighted ? 2 : isSimilar ? 1.5 : 0.2}
           toneMapped={false}
           transparent={animateIn || !textureLoaded}
           opacity={animateIn ? animationProgressRef.current : textureLoaded ? 1 : 0.5}
@@ -167,12 +167,40 @@ function AvatarNode({
         />
       </mesh>
       {isHighlighted && (
+        <>
+          <mesh position={position}>
+            <ringGeometry args={[displaySize * 1.8, displaySize * 2.2, 64]} />
+            <meshStandardMaterial
+              color="#00ff88"
+              emissive="#00ff88"
+              emissiveIntensity={2}
+              side={THREE.DoubleSide}
+              transparent
+              opacity={0.8}
+              toneMapped={false}
+            />
+          </mesh>
+          <mesh position={position}>
+            <ringGeometry args={[displaySize * 1.3, displaySize * 1.6, 64]} />
+            <meshStandardMaterial
+              color="#00ffaa"
+              emissive="#00ffaa"
+              emissiveIntensity={1.5}
+              side={THREE.DoubleSide}
+              transparent
+              opacity={0.5}
+              toneMapped={false}
+            />
+          </mesh>
+        </>
+      )}
+      {isSimilar && !isHighlighted && (
         <mesh position={position}>
-          <ringGeometry args={[displaySize * 1.5, displaySize * 1.8, 32]} />
+          <ringGeometry args={[displaySize * 1.4, displaySize * 1.6, 32]} />
           <meshStandardMaterial
-            color="#00ffff"
-            emissive="#00ffff"
-            emissiveIntensity={1}
+            color="#ff6b9d"
+            emissive="#ff6b9d"
+            emissiveIntensity={1.5}
             side={THREE.DoubleSide}
             transparent
             opacity={0.6}
@@ -309,6 +337,20 @@ function GlowingParticle({
           </mesh>
         </>
       )}
+      {isSimilar && !isHighlighted && (
+        <mesh>
+          <ringGeometry args={[size * 1.4, size * 1.6, 32]} />
+          <meshStandardMaterial
+            color="#ff6b9d"
+            emissive="#ff6b9d"
+            emissiveIntensity={1.5}
+            side={THREE.DoubleSide}
+            transparent
+            opacity={0.6}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
     </mesh>
   );
 }
@@ -332,6 +374,7 @@ function ParticleCloud({
   onClick?: (index: number, point: Point, event: MouseEvent) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const materialRef = useRef<THREE.MeshStandardMaterial>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [avatarCache, setAvatarCache] = useState<Map<string, string>>(new Map());
   const fetchedUserIdsRef = useRef<Set<string>>(new Set());
@@ -366,7 +409,18 @@ function ParticleCloud({
   }, [regularPoints, highlightedSet, points]);
 
   // Determine if we should fade out regular nodes (when there's a highlight)
-  const shouldFadeRegular = highlightedNodeIndex !== null && highlightedNodeIndex !== undefined;
+  const shouldFadeRegular = useMemo(() => {
+    return highlightedNodeIndex !== null && highlightedNodeIndex !== undefined;
+  }, [highlightedNodeIndex]);
+
+  // Update material opacity when fade state changes
+  useEffect(() => {
+    if (materialRef.current) {
+      materialRef.current.transparent = shouldFadeRegular;
+      materialRef.current.opacity = shouldFadeRegular ? 0.15 : 1;
+      materialRef.current.needsUpdate = true;
+    }
+  }, [shouldFadeRegular]);
 
   // Fetch avatar for a specific user_id (used on click)
   const fetchAvatarForUser = async (user_id: string) => {
@@ -479,20 +533,23 @@ function ParticleCloud({
   return (
     <group>
       {/* Instanced mesh for regular points */}
-      <instancedMesh
-        ref={meshRef}
-        args={[undefined, undefined, regularPointsForInstancing.length]}
-      >
-        <sphereGeometry args={[0.12, 12, 12]} />
-        <meshStandardMaterial
-          vertexColors
-          emissive={clusterLabels ? "#ffffff" : "#00aacc"}
-          emissiveIntensity={clusterLabels ? 0.5 : 0.8}
-          toneMapped={false}
-          transparent={shouldFadeRegular}
-          opacity={shouldFadeRegular ? 0.15 : 1}
-        />
-      </instancedMesh>
+      {regularPointsForInstancing.length > 0 && (
+        <instancedMesh
+          ref={meshRef}
+          args={[undefined, undefined, regularPointsForInstancing.length]}
+        >
+          <sphereGeometry args={[0.12, 12, 12]} />
+          <meshStandardMaterial
+            ref={materialRef}
+            vertexColors
+            emissive={clusterLabels ? "#ffffff" : "#00aacc"}
+            emissiveIntensity={clusterLabels ? 0.5 : 0.8}
+            toneMapped={false}
+            transparent={shouldFadeRegular}
+            opacity={shouldFadeRegular ? 0.15 : 1}
+          />
+        </instancedMesh>
+      )}
 
       {/* Avatar nodes for all points with user_ids */}
       {points.map((point, i) => {
@@ -611,41 +668,75 @@ function Grid({ is3D }: { is3D: boolean }) {
   );
 }
 
-// Camera controller with smooth transitions to highlighted node
+// Camera controller with smooth zoom to cluster
 function CameraController({ 
   is3D,
   targetNodeIndex,
+  similarNodeIndices,
   points,
 }: { 
   is3D: boolean;
   targetNodeIndex?: number | null;
+  similarNodeIndices?: number[];
   points: Point[];
 }) {
-  const { camera } = useThree();
+  const { camera, controls } = useThree();
   const targetRef = useRef<THREE.Vector3 | null>(null);
   const isTransitioningRef = useRef(false);
   const transitionStartRef = useRef<THREE.Vector3 | null>(null);
   const transitionProgressRef = useRef(0);
+  const lastTargetRef = useRef<number | null>(null);
   
+  // Calculate cluster center when target or similar nodes change
   useEffect(() => {
-    if (targetNodeIndex !== null && targetNodeIndex !== undefined && points[targetNodeIndex]) {
-      const point = points[targetNodeIndex];
-      targetRef.current = new THREE.Vector3(
-        point.x,
-        point.y,
-        is3D && point.z !== null ? point.z : 0
-      );
+    if (targetNodeIndex === null || targetNodeIndex === undefined || points.length === 0) {
+      targetRef.current = null;
+      isTransitioningRef.current = false;
+      return;
+    }
+
+    // Only transition if this is a new target (not already transitioning to the same one)
+    if (lastTargetRef.current === targetNodeIndex && isTransitioningRef.current) {
+      return; // Already transitioning to this target
+    }
+
+    const highlightedPoint = points[targetNodeIndex];
+    if (!highlightedPoint) {
+      targetRef.current = null;
+      return;
+    }
+
+    // Calculate cluster center: average position of highlighted node + similar nodes
+    const clusterIndices = [targetNodeIndex, ...(similarNodeIndices || [])];
+    let sumX = 0, sumY = 0, sumZ = 0;
+    let count = 0;
+
+    clusterIndices.forEach((idx) => {
+      const point = points[idx];
+      if (point) {
+        sumX += point.x;
+        sumY += point.y;
+        sumZ += (point.z !== null ? point.z : 0);
+        count++;
+      }
+    });
+
+    if (count > 0) {
+      const centerX = sumX / count;
+      const centerY = sumY / count;
+      const centerZ = sumZ / count;
+
+      targetRef.current = new THREE.Vector3(centerX, centerY, centerZ);
       transitionStartRef.current = camera.position.clone();
       transitionProgressRef.current = 0;
       isTransitioningRef.current = true;
-    } else {
-      targetRef.current = null;
-      isTransitioningRef.current = false;
+      lastTargetRef.current = targetNodeIndex;
     }
-  }, [targetNodeIndex, points, is3D, camera]);
+  }, [targetNodeIndex, similarNodeIndices, points, camera]);
   
+  // Set initial camera position
   useEffect(() => {
-    if (!targetRef.current && !isTransitioningRef.current) {
+    if (!isTransitioningRef.current) {
       if (is3D) {
         camera.position.set(20, 15, 20);
       } else {
@@ -655,25 +746,51 @@ function CameraController({
     }
   }, [is3D, camera]);
   
+  // Smooth camera transition
   useFrame((state, delta) => {
     if (targetRef.current && isTransitioningRef.current && transitionStartRef.current) {
-      transitionProgressRef.current += delta * 2;
+      transitionProgressRef.current += delta * 1.5; // Adjust speed (1.5 = ~0.67 seconds)
       
       if (transitionProgressRef.current >= 1) {
-        // Transition complete, stop interfering
+        // Transition complete
         const targetPos = targetRef.current.clone();
-        targetPos.add(new THREE.Vector3(0, 0, 15));
+        // Position camera at a good viewing distance (adjust based on cluster size)
+        const distance = 8; // Distance from cluster center
+        const offset = new THREE.Vector3(0, 0, distance);
+        targetPos.add(offset);
+        
         camera.position.copy(targetPos);
+        
+        // Update OrbitControls target to match cluster center
+        if (controls && 'target' in controls) {
+          (controls as any).target.copy(targetRef.current);
+          (controls as any).update();
+        }
+        
         camera.lookAt(targetRef.current);
         isTransitioningRef.current = false;
       } else {
-        // Smoothly interpolate
+        // Smooth interpolation with easing
+        const easeProgress = 1 - Math.pow(1 - transitionProgressRef.current, 3); // Ease out cubic
+        
         const targetPos = targetRef.current.clone();
-        targetPos.add(new THREE.Vector3(0, 0, 15));
-        camera.position.lerpVectors(transitionStartRef.current, targetPos, transitionProgressRef.current);
+        const distance = 8;
+        const offset = new THREE.Vector3(0, 0, distance);
+        targetPos.add(offset);
+        
+        camera.position.lerpVectors(transitionStartRef.current, targetPos, easeProgress);
+        
+        // Interpolate the look-at target
         const lookAtTarget = targetRef.current.clone();
-        lookAtTarget.lerp(new THREE.Vector3(0, 0, 0), 1 - transitionProgressRef.current);
-        camera.lookAt(lookAtTarget);
+        const lookAtStart = new THREE.Vector3(0, 0, 0);
+        const currentLookAt = lookAtStart.clone().lerp(lookAtTarget, easeProgress);
+        camera.lookAt(currentLookAt);
+        
+        // Update OrbitControls target during transition
+        if (controls && 'target' in controls) {
+          (controls as any).target.copy(currentLookAt);
+          (controls as any).update();
+        }
       }
     }
   });
@@ -704,6 +821,7 @@ function Scene({
       <CameraController 
         is3D={is3D} 
         targetNodeIndex={highlightedNodeIndex}
+        similarNodeIndices={similarNodeIndices}
         points={points}
       />
       <ambientLight intensity={0.3} />
@@ -728,6 +846,7 @@ function Scene({
         enableZoom={true}
         minDistance={5}
         maxDistance={50}
+        makeDefault
       />
       
       {/* Bloom effect */}

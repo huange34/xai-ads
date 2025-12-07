@@ -104,9 +104,7 @@ export default function GraphPage() {
           setSearchState("success");
           setSearchResult(searchData);
           setHighlightedNodeIndex(searchData.node_index);
-          setSimilarNodeIndices(
-            searchData.similar_users?.map((u) => u.node_index) || []
-          );
+          // Don't set similar nodes here - will be calculated based on distance
           // Show buying behavior popup
           setShowBehaviorPopup(true);
           return searchData;
@@ -248,6 +246,52 @@ export default function GraphPage() {
       }
     }
   };
+
+  // Calculate similar nodes based on 3D distance when highlighted node or points change
+  useEffect(() => {
+    if (highlightedNodeIndex === null || highlightedNodeIndex === undefined || points.length === 0) {
+      setSimilarNodeIndices([]);
+      return;
+    }
+
+    const highlightedPoint = points[highlightedNodeIndex];
+    if (!highlightedPoint) {
+      setSimilarNodeIndices([]);
+      return;
+    }
+
+    // Calculate 3D distance from highlighted point to all other points
+    const distances: Array<{ index: number; distance: number }> = [];
+    
+    const hx = highlightedPoint.x;
+    const hy = highlightedPoint.y;
+    const hz = highlightedPoint.z !== null ? highlightedPoint.z : 0;
+
+    points.forEach((point, index) => {
+      if (index === highlightedNodeIndex) return; // Skip self
+      
+      const px = point.x;
+      const py = point.y;
+      const pz = point.z !== null ? point.z : 0;
+      
+      // Calculate Euclidean distance in 3D space
+      const dx = px - hx;
+      const dy = py - hy;
+      const dz = pz - hz;
+      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      
+      distances.push({ index, distance });
+    });
+
+    // Sort by distance and take nodes within a threshold (e.g., 2 units)
+    const distanceThreshold = 0.5; // Adjust this value to control cluster size
+    const nearbyNodes = distances
+      .filter(d => d.distance <= distanceThreshold)
+      .sort((a, b) => a.distance - b.distance)
+      .map(d => d.index);
+
+    setSimilarNodeIndices(nearbyNodes);
+  }, [highlightedNodeIndex, points]);
 
   return (
     <main className="fixed inset-0 bg-black overflow-hidden">
