@@ -46,7 +46,7 @@ function AvatarNode({
   isHovered: boolean;
   isHighlighted?: boolean;
   isSimilar?: boolean;
-  onClick: () => void;
+  onClick?: (event?: any) => void;
   animateIn?: boolean;
   size?: number;
 }) {
@@ -114,12 +114,12 @@ function AvatarNode({
           materialRef.current.opacity = animationProgressRef.current;
         }
       } else if (isHighlighted) {
-        // Pulsing glow for highlighted node
-        const scale = 1.2 + Math.sin(state.clock.elapsedTime * 4) * 0.2;
+        // Big pulsing "jupiter" glow for highlighted node
+        const scale = 1.3 + Math.sin(state.clock.elapsedTime * 3) * 0.3;
         meshRef.current.scale.setScalar(scale);
       } else if (isSimilar) {
         // Subtle pulse for similar nodes
-        const scale = 1.05 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+        const scale = 1.1 + Math.sin(state.clock.elapsedTime * 2.5) * 0.1;
         meshRef.current.scale.setScalar(scale);
       } else if (!animateIn) {
         meshRef.current.scale.setScalar(1);
@@ -132,7 +132,18 @@ function AvatarNode({
       <mesh
         ref={meshRef}
         position={position}
-        onClick={onClick}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          if (onClick) {
+            // Get mouse position from Three.js event (it has different properties)
+            const syntheticEvent = {
+              clientX: (e as any).clientX || (e as any).offsetX || window.innerWidth / 2,
+              clientY: (e as any).clientY || (e as any).offsetY || window.innerHeight / 2,
+              stopPropagation: () => {},
+            };
+            onClick(syntheticEvent);
+          }
+        }}
       >
         <sphereGeometry args={[displaySize, 32, 32]} />
         <meshStandardMaterial
@@ -179,7 +190,7 @@ function GlowingParticle({
   isHovered: boolean;
   isHighlighted?: boolean;
   isSimilar?: boolean;
-  onClick: () => void;
+  onClick?: (event?: any) => void;
   animateIn?: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -191,13 +202,13 @@ function GlowingParticle({
   let size = isNew ? 0.25 : 0.12;
   
   if (isHighlighted) {
-    baseColor = "#00ffff"; // Cyan for highlighted
-    emissiveIntensity = 3;
-    size = 0.2;
+    baseColor = "#00ff88"; // Big green "jupiter" effect
+    emissiveIntensity = 5;
+    size = 0.4; // Much larger for jupiter effect
   } else if (isSimilar) {
-    baseColor = "#00ffaa"; // Teal-green for similar
-    emissiveIntensity = 1.5;
-    size = 0.15;
+    baseColor = "#ff6b9d"; // Pink/magenta for nearby community
+    emissiveIntensity = 2;
+    size = 0.18;
   }
   
   const hoverColor = "#ffffff";
@@ -213,12 +224,16 @@ function GlowingParticle({
           materialRef.current.opacity = animationProgressRef.current;
         }
       } else if (isHighlighted) {
-        // Pulsing glow for highlighted node
-        const scale = 1.2 + Math.sin(state.clock.elapsedTime * 4) * 0.2;
+        // Big pulsing "jupiter" glow for highlighted node
+        const scale = 1.3 + Math.sin(state.clock.elapsedTime * 3) * 0.3;
         meshRef.current.scale.setScalar(scale);
+        // Pulsing emissive intensity
+        if (materialRef.current) {
+          materialRef.current.emissiveIntensity = 5 + Math.sin(state.clock.elapsedTime * 4) * 1;
+        }
       } else if (isSimilar) {
         // Subtle pulse for similar nodes
-        const scale = 1.05 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+        const scale = 1.1 + Math.sin(state.clock.elapsedTime * 2.5) * 0.1;
         meshRef.current.scale.setScalar(scale);
       } else if (isNew && !animateIn) {
         const scale = 1 + Math.sin(state.clock.elapsedTime * 3) * 0.3;
@@ -233,7 +248,17 @@ function GlowingParticle({
     <mesh
       ref={meshRef}
       position={position}
-      onClick={onClick}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        if (onClick) {
+          const syntheticEvent = {
+            clientX: (e as any).clientX || (e as any).offsetX || window.innerWidth / 2,
+            clientY: (e as any).clientY || (e as any).offsetY || window.innerHeight / 2,
+            stopPropagation: () => {},
+          };
+          onClick(syntheticEvent);
+        }
+      }}
     >
       <sphereGeometry args={[size, 16, 16]} />
       <meshStandardMaterial
@@ -246,18 +271,34 @@ function GlowingParticle({
         opacity={animateIn ? 0 : 1}
       />
       {isHighlighted && (
-        <mesh>
-          <ringGeometry args={[size * 1.5, size * 1.8, 32]} />
-          <meshStandardMaterial
-            color="#00ffff"
-            emissive="#00ffff"
-            emissiveIntensity={1}
-            side={THREE.DoubleSide}
-            transparent
-            opacity={0.6}
-            toneMapped={false}
-          />
-        </mesh>
+        <>
+          {/* Outer glow ring */}
+          <mesh>
+            <ringGeometry args={[size * 1.8, size * 2.2, 64]} />
+            <meshStandardMaterial
+              color="#00ff88"
+              emissive="#00ff88"
+              emissiveIntensity={2}
+              side={THREE.DoubleSide}
+              transparent
+              opacity={0.8}
+              toneMapped={false}
+            />
+          </mesh>
+          {/* Inner glow ring */}
+          <mesh>
+            <ringGeometry args={[size * 1.3, size * 1.6, 64]} />
+            <meshStandardMaterial
+              color="#00ffaa"
+              emissive="#00ffaa"
+              emissiveIntensity={1.5}
+              side={THREE.DoubleSide}
+              transparent
+              opacity={0.5}
+              toneMapped={false}
+            />
+          </mesh>
+        </>
       )}
     </mesh>
   );
@@ -270,12 +311,14 @@ function ParticleCloud({
   highlightedNodeIndex,
   similarNodeIndices,
   onHover,
+  onClick,
 }: {
   points: Point[];
   is3D: boolean;
   highlightedNodeIndex?: number | null;
   similarNodeIndices?: number[];
   onHover?: (index: number | null, point: Point | null) => void;
+  onClick?: (index: number, point: Point, event: MouseEvent) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -307,7 +350,10 @@ function ParticleCloud({
     });
   }, [regularPoints, highlightedSet, points]);
 
-  // Fetch avatar for a specific user_id when hovering
+  // Determine if we should fade out regular nodes (when there's a highlight)
+  const shouldFadeRegular = highlightedNodeIndex !== null && highlightedNodeIndex !== undefined;
+
+  // Fetch avatar for a specific user_id (used on click)
   const fetchAvatarForUser = async (user_id: string) => {
     if (avatarCache.has(user_id) || fetchedUserIdsRef.current.has(user_id)) {
       return; // Already fetched or fetching
@@ -375,16 +421,11 @@ function ParticleCloud({
       }
     }
     
-    // Update hover state and fetch avatar if needed
+    // Update hover state
     if (hoveredPointIndex !== null && hoveredPointIndex !== hoveredIndex) {
       setHoveredIndex(hoveredPointIndex);
       const hoveredPoint = points[hoveredPointIndex];
       onHover?.(hoveredPointIndex, hoveredPoint);
-      
-      // Fetch avatar if this point has a user_id and we don't have it yet
-      if (hoveredPoint.user_id && !avatarCache.has(hoveredPoint.user_id)) {
-        fetchAvatarForUser(hoveredPoint.user_id);
-      }
     } else if (hoveredPointIndex === null && hoveredIndex !== null) {
       setHoveredIndex(null);
       onHover?.(null, null);
@@ -428,6 +469,8 @@ function ParticleCloud({
           emissive="#00aacc"
           emissiveIntensity={0.8}
           toneMapped={false}
+          transparent={shouldFadeRegular}
+          opacity={shouldFadeRegular ? 0.15 : 1}
         />
       </instancedMesh>
 
@@ -456,7 +499,15 @@ function ParticleCloud({
               isHovered={hoveredIndex === i}
               isHighlighted={isHighlighted}
               isSimilar={isSimilar}
-              onClick={() => {}}
+              onClick={(e) => {
+                if (onClick) {
+                  const event = e || {
+                    clientX: window.innerWidth / 2,
+                    clientY: window.innerHeight / 2,
+                  };
+                  onClick(i, point, event);
+                }
+              }}
               animateIn={isNewlyAdded}
               size={isHighlighted ? 0.2 : isSimilar ? 0.15 : 0.12}
             />
@@ -476,7 +527,12 @@ function ParticleCloud({
             isHovered={hoveredIndex === i}
             isHighlighted={isHighlighted}
             isSimilar={isSimilar}
-            onClick={() => {}}
+            onClick={() => {
+              if (onClick) {
+                const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 });
+                onClick(i, point, event);
+              }
+            }}
             animateIn={isNewlyAdded}
           />
         );
@@ -504,7 +560,15 @@ function ParticleCloud({
               isHovered={hoveredIndex === i}
               isHighlighted={isHighlighted}
               isSimilar={isSimilar}
-              onClick={() => {}}
+              onClick={(e) => {
+                if (onClick) {
+                  const event = e || {
+                    clientX: window.innerWidth / 2,
+                    clientY: window.innerHeight / 2,
+                  };
+                  onClick(i, point, event);
+                }
+              }}
               animateIn={isNewlyAdded}
             />
           );
@@ -604,12 +668,14 @@ function Scene({
   highlightedNodeIndex,
   similarNodeIndices,
   onHover,
+  onClick,
 }: {
   points: Point[];
   is3D: boolean;
   highlightedNodeIndex?: number | null;
   similarNodeIndices?: number[];
   onHover?: (index: number | null, point: Point | null) => void;
+  onClick?: (index: number, point: Point, event: MouseEvent) => void;
 }) {
   return (
     <>
@@ -628,6 +694,7 @@ function Scene({
         highlightedNodeIndex={highlightedNodeIndex}
         similarNodeIndices={similarNodeIndices}
         onHover={onHover}
+        onClick={onClick}
       />
       <Grid is3D={is3D} />
       
@@ -682,6 +749,9 @@ export default function EmbeddingVisualizer({
   const [previousEmbedding, setPreviousEmbedding] = useState<number[] | undefined>(undefined);
   const [hoveredPoint, setHoveredPoint] = useState<{ index: number; point: Point } | null>(null);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
+  const [clickedPoint, setClickedPoint] = useState<{ index: number; point: Point } | null>(null);
+  const [clickedPosition, setClickedPosition] = useState<{ x: number; y: number } | null>(null);
+  const [avatarCache, setAvatarCache] = useState<Map<string, string>>(new Map());
 
   // Handle new embedding dynamically without reload
   useEffect(() => {
@@ -705,9 +775,35 @@ export default function EmbeddingVisualizer({
     }
   };
 
+  const handleClick = (index: number, point: Point, event?: any) => {
+    if (event?.stopPropagation) event.stopPropagation();
+    setClickedPoint({ index, point });
+    // Get mouse position from event, global position, or use center of screen
+    const x = event?.clientX || globalMousePos.x || window.innerWidth / 2;
+    const y = event?.clientY || globalMousePos.y || window.innerHeight / 2;
+    setClickedPosition({ x, y });
+  };
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (clickedPoint) {
+        setClickedPoint(null);
+        setClickedPosition(null);
+      }
+    };
+    if (clickedPoint) {
+      document.addEventListener('click', handleOutsideClick);
+      return () => document.removeEventListener('click', handleOutsideClick);
+    }
+  }, [clickedPoint]);
+
+  // Track mouse position globally for click events
+  const [globalMousePos, setGlobalMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       setMousePosition({ x: e.clientX, y: e.clientY });
+      setGlobalMousePos({ x: e.clientX, y: e.clientY });
     };
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
@@ -872,6 +968,10 @@ export default function EmbeddingVisualizer({
           <Canvas
             camera={{ position: [20, 15, 20], fov: 60 }}
             gl={{ antialias: true, alpha: true }}
+            onPointerMissed={() => {
+              setClickedPoint(null);
+              setClickedPosition(null);
+            }}
           >
             <color attach="background" args={["#000000"]} />
             <fog attach="fog" args={["#000000", 30, 60]} />
@@ -920,6 +1020,52 @@ export default function EmbeddingVisualizer({
             {hoveredPoint.point.user_id && (
               <div className="text-xs text-gray-400 mt-1">ID: {hoveredPoint.point.user_id}</div>
             )}
+          </div>
+        )}
+
+        {/* Click Tooltip with Avatar */}
+        {clickedPoint && clickedPosition && (
+          <div
+            className="absolute z-50 bg-black/90 backdrop-blur-md border border-white/30 rounded-xl p-4 text-white shadow-2xl min-w-[200px] pointer-events-auto"
+            style={{
+              left: `${clickedPosition.x + 10}px`,
+              top: `${clickedPosition.y - 10}px`,
+              transform: 'translateY(-100%)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              {clickedPoint.point.profile_image_url || avatarCache.has(clickedPoint.point.user_id || '') ? (
+                <img
+                  src={clickedPoint.point.profile_image_url || avatarCache.get(clickedPoint.point.user_id || '') || ''}
+                  alt={clickedPoint.point.username || 'User'}
+                  className="w-12 h-12 rounded-full border-2 border-white/30"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-cyan-500/20 border-2 border-cyan-500/50 flex items-center justify-center">
+                  <span className="text-cyan-400 text-lg">@</span>
+                </div>
+              )}
+              <div className="flex-1">
+                <div className="font-semibold text-base">
+                  {clickedPoint.point.username ? `@${clickedPoint.point.username}` : `Node ${clickedPoint.index}`}
+                </div>
+                {clickedPoint.point.user_id && (
+                  <div className="text-xs text-gray-400 mt-1">ID: {clickedPoint.point.user_id}</div>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  setClickedPoint(null);
+                  setClickedPosition(null);
+                }}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -427,6 +427,13 @@ class GraphSearchResponse(BaseModel):
     similar_users: List[SimilarUser] = []
 
 
+class BuyingBehaviorResponse(BaseModel):
+    """Response model for user buying behavior."""
+    user_id: str
+    username: str
+    feature_breakdown: dict
+
+
 @app.post("/graph/search", response_model=GraphSearchResponse)
 async def search_user_in_graph(request: GraphSearchRequest):
     """
@@ -596,6 +603,78 @@ async def get_user_avatar(user_id: str):
             status_code=500,
             detail=f"Failed to fetch user avatar: {str(e)}"
         )
+
+
+# ----- Grok Ad Targeting Endpoint -----
+
+class GrokTargetRequest(BaseModel):
+    """Request model for Grok ad targeting."""
+    ad_idea: str = Field(..., description="Description of the ad idea")
+
+
+class GrokTargetResponse(BaseModel):
+    """Response model for Grok ad targeting."""
+    target_node_indices: List[int] = Field(..., description="List of node indices to highlight")
+    reasoning: Optional[str] = Field(None, description="Explanation of why these users were selected")
+
+
+@app.post("/grok/target", response_model=GrokTargetResponse)
+async def grok_target_users(request: GrokTargetRequest):
+    """
+    Use Grok to find the best targeted customers for an ad idea.
+    
+    For now, this returns a spatially close cluster of users as a placeholder.
+    In the future, this will use Grok API to analyze the ad idea and find
+    the most relevant user cluster based on their embeddings and interests.
+    """
+    import json
+    import random
+    from sklearn.decomposition import PCA
+    from sklearn.metrics.pairwise import euclidean_distances
+    
+    # Load embeddings
+    embeddings_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "user_embeddingsv2.npy"
+    )
+    
+    if not os.path.exists(embeddings_path):
+        raise HTTPException(status_code=404, detail="Embeddings not found")
+    
+    embeddings = np.load(embeddings_path)
+    total_nodes = embeddings.shape[0]
+    
+    if total_nodes == 0:
+        raise HTTPException(status_code=404, detail="No nodes found in graph")
+    
+    # Project to 3D using PCA (same as visualization)
+    pca = PCA(n_components=3, random_state=42)
+    projected = pca.fit_transform(embeddings)
+    
+    # Normalize to same range as visualization
+    projected = (projected - projected.min(axis=0)) / (projected.max(axis=0) - projected.min(axis=0) + 1e-8)
+    projected = projected * 20 - 10  # Scale to [-10, 10]
+    
+    # Pick a random point as cluster center
+    center_idx = random.randint(0, total_nodes - 1)
+    center_point = projected[center_idx:center_idx+1]
+    
+    # Calculate distances from center to all points
+    distances = euclidean_distances(center_point, projected)[0]
+    
+    # Select 20-30 closest nodes (excluding the center itself)
+    cluster_size = random.randint(20, 30)
+    # Get indices sorted by distance
+    sorted_indices = np.argsort(distances)
+    # Skip the center point itself, take next cluster_size points
+    target_indices = sorted_indices[1:cluster_size+1].tolist()
+    
+    reasoning = f"Selected {len(target_indices)} users from a spatially close cluster as a placeholder. Future implementation will use Grok to analyze: '{request.ad_idea}'"
+    
+    return GrokTargetResponse(
+        target_node_indices=target_indices,
+        reasoning=reasoning
+    )
 
 
 if __name__ == "__main__":

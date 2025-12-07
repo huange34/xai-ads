@@ -3,6 +3,7 @@
 import { useState, lazy, Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import BottomTab, { SearchState } from "@/components/BottomTab";
+import BuyingBehaviorPopup from "@/components/BuyingBehaviorPopup";
 
 // Lazy load the visualizer to avoid SSR issues with Three.js
 const EmbeddingVisualizer = lazy(() => import("@/components/EmbeddingVisualizer"));
@@ -74,6 +75,10 @@ export default function GraphPage() {
   const [points, setPoints] = useState<any[]>([]);
   const [hasAutoSearched, setHasAutoSearched] = useState(false);
   const [method, setMethod] = useState<"pca" | "tsne">("pca");
+  const [grokState, setGrokState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [grokError, setGrokError] = useState<string | null>(null);
+  const [grokTargetIndices, setGrokTargetIndices] = useState<number[]>([]);
+  const [showBehaviorPopup, setShowBehaviorPopup] = useState(false);
 
   const handleSearch = async (handle: string): Promise<SearchResult> => {
     setSearchState("loading");
@@ -103,6 +108,8 @@ export default function GraphPage() {
           setSimilarNodeIndices(
             searchData.similar_users?.map((u) => u.node_index) || []
           );
+          // Show buying behavior popup
+          setShowBehaviorPopup(true);
           return searchData;
         }
       }
@@ -184,6 +191,47 @@ export default function GraphPage() {
     setHighlightedNodeIndex(null);
     setSimilarNodeIndices([]);
     setNewEmbedding(undefined);
+    setNewUserInfo(undefined);
+    setGrokState("idle");
+    setGrokError(null);
+    setGrokTargetIndices([]);
+    setShowBehaviorPopup(false);
+  };
+
+  const handleGrokTarget = async (adIdea: string): Promise<number[]> => {
+    setGrokState("loading");
+    setGrokError(null);
+    setHighlightedNodeIndex(null);
+    setSimilarNodeIndices([]);
+    setGrokTargetIndices([]);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${apiUrl}/grok/target`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ad_idea: adIdea }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || "Failed to analyze ad idea");
+      }
+
+      const data = await response.json();
+      const targetIndices = data.target_node_indices || [];
+      
+      setGrokTargetIndices(targetIndices);
+      setSimilarNodeIndices(targetIndices); // Use similarNodeIndices to highlight the cluster
+      setGrokState("success");
+      
+      return targetIndices;
+    } catch (err) {
+      setGrokState("error");
+      const errorMessage = err instanceof Error ? err.message : "An error occurred";
+      setGrokError(errorMessage);
+      return [];
+    }
   };
 
   const handlePointsUpdate = (updatedPoints: any[]) => {
@@ -249,7 +297,20 @@ export default function GraphPage() {
         searchResult={searchResult}
         error={error}
         onReset={handleReset}
+        onGrokTarget={handleGrokTarget}
+        grokState={grokState}
+        grokError={grokError}
       />
+      
+      {/* Buying Behavior Popup */}
+      {searchResult?.found && searchResult.user_id && searchResult.username && (
+        <BuyingBehaviorPopup
+          user_id={searchResult.user_id}
+          username={searchResult.username}
+          isOpen={showBehaviorPopup}
+          onClose={() => setShowBehaviorPopup(false)}
+        />
+      )}
     </main>
   );
 }
