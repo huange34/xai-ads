@@ -100,9 +100,17 @@ class TweetFeatureExtractor:
         
         try:
             results = self.sentiment_model(text, truncation=True, max_length=512)
-            # Results format: [{'label': 'POSITIVE', 'score': 0.9}, ...]
+            # Results format with return_all_scores=True: [[{'label': 'negative', 'score': 0.1}, ...]]
             # Map to [-1, 1]: NEGATIVE -> -1, NEUTRAL -> 0, POSITIVE -> 1
-            score_map = {'NEGATIVE': -1.0, 'NEUTRAL': 0.0, 'POSITIVE': 1.0}
+            score_map = {
+                'negative': -1.0, 'NEGATIVE': -1.0,
+                'neutral': 0.0, 'NEUTRAL': 0.0,
+                'positive': 1.0, 'POSITIVE': 1.0
+            }
+            
+            # Handle nested list structure from return_all_scores=True
+            if results and isinstance(results[0], list):
+                results = results[0]
             
             # Weighted average
             weighted_sum = 0.0
