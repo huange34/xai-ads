@@ -2,7 +2,7 @@
 
 import { useRef, useMemo, useState, useEffect } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { OrbitControls, Html } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 
@@ -12,35 +12,219 @@ interface Point {
   z: number | null;
   index: number;
   is_new: boolean;
+  username?: string;
+  user_id?: string;
+  profile_image_url?: string;
 }
 
 interface EmbeddingVisualizerProps {
   newEmbedding?: number[];
-  onClose: () => void;
+  newUserInfo?: { username: string; user_id: string; profile_image_url?: string };
+  onClose?: () => void;
+  highlightedNodeIndex?: number | null;
+  similarNodeIndices?: number[];
+  hideHeader?: boolean;
+  onPointsUpdate?: (points: Point[]) => void;
+  onAddNewPoint?: (embedding: number[], userInfo: { username: string; user_id: string }) => void;
+  method?: "pca" | "tsne";
+  onMethodChange?: (method: "pca" | "tsne") => void;
 }
 
-// Individual glowing particle
+// Avatar node with profile image
+function AvatarNode({
+  position,
+  profileImageUrl,
+  isHovered,
+  isHighlighted,
+  isSimilar,
+  onClick,
+  animateIn = false,
+  size = 0.15,
+}: {
+  position: [number, number, number];
+  profileImageUrl: string;
+  isHovered: boolean;
+  isHighlighted?: boolean;
+  isSimilar?: boolean;
+  onClick: () => void;
+  animateIn?: boolean;
+  size?: number;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const materialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const textureRef = useRef<THREE.Texture | null>(null);
+  const animationProgressRef = useRef(0);
+  const [textureLoaded, setTextureLoaded] = useState(false);
+
+  // Load texture
+  useEffect(() => {
+    const loader = new THREE.TextureLoader();
+    // X API returns URLs like https://pbs.twimg.com/profile_images/..._normal.jpg
+    // Replace _normal with _400x400 for better quality
+    const imageUrl = profileImageUrl.replace('_normal', '_400x400');
+    
+    loader.load(
+      imageUrl,
+      (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        textureRef.current = texture;
+        setTextureLoaded(true);
+        if (materialRef.current) {
+          materialRef.current.map = texture;
+          materialRef.current.needsUpdate = true;
+        }
+      },
+      undefined,
+      (error) => {
+        console.error("Failed to load avatar:", error);
+        // Fallback: try original URL
+        if (imageUrl !== profileImageUrl) {
+          loader.load(
+            profileImageUrl,
+            (texture) => {
+              texture.colorSpace = THREE.SRGBColorSpace;
+              textureRef.current = texture;
+              setTextureLoaded(true);
+              if (materialRef.current) {
+                materialRef.current.map = texture;
+                materialRef.current.needsUpdate = true;
+              }
+            }
+          );
+        }
+      }
+    );
+  }, [profileImageUrl]);
+
+  let displaySize = size;
+  if (isHighlighted) {
+    displaySize = size * 1.3;
+  } else if (isSimilar) {
+    displaySize = size * 1.1;
+  }
+
+  useFrame((state, delta) => {
+    if (meshRef.current) {
+      // Animate in new nodes
+      if (animateIn && animationProgressRef.current < 1) {
+        animationProgressRef.current = Math.min(1, animationProgressRef.current + delta * 3);
+        const scale = animationProgressRef.current;
+        meshRef.current.scale.setScalar(scale);
+        if (materialRef.current) {
+          materialRef.current.opacity = animationProgressRef.current;
+        }
+      } else if (isHighlighted) {
+        // Pulsing glow for highlighted node
+        const scale = 1.2 + Math.sin(state.clock.elapsedTime * 4) * 0.2;
+        meshRef.current.scale.setScalar(scale);
+      } else if (isSimilar) {
+        // Subtle pulse for similar nodes
+        const scale = 1.05 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+        meshRef.current.scale.setScalar(scale);
+      } else if (!animateIn) {
+        meshRef.current.scale.setScalar(1);
+      }
+    }
+  });
+
+  return (
+    <group>
+      <mesh
+        ref={meshRef}
+        position={position}
+        onClick={onClick}
+      >
+        <sphereGeometry args={[displaySize, 32, 32]} />
+        <meshStandardMaterial
+          ref={materialRef}
+          map={textureRef.current || null}
+          emissive={isHighlighted ? "#00ffff" : isSimilar ? "#00ffaa" : "#00aacc"}
+          emissiveIntensity={isHighlighted ? 0.5 : isSimilar ? 0.3 : 0.2}
+          toneMapped={false}
+          transparent={animateIn || !textureLoaded}
+          opacity={animateIn ? animationProgressRef.current : textureLoaded ? 1 : 0.5}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      {isHighlighted && (
+        <mesh position={position}>
+          <ringGeometry args={[displaySize * 1.5, displaySize * 1.8, 32]} />
+          <meshStandardMaterial
+            color="#00ffff"
+            emissive="#00ffff"
+            emissiveIntensity={1}
+            side={THREE.DoubleSide}
+            transparent
+            opacity={0.6}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+// Individual glowing particle (fallback for nodes without avatars)
 function GlowingParticle({
   position,
   isNew,
   isHovered,
+  isHighlighted,
+  isSimilar,
   onClick,
+  animateIn = false,
 }: {
   position: [number, number, number];
   isNew: boolean;
   isHovered: boolean;
+  isHighlighted?: boolean;
+  isSimilar?: boolean;
   onClick: () => void;
+  animateIn?: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
-  const baseColor = isNew ? "#00ff88" : "#4488ff";
+  const materialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const animationProgressRef = useRef(0);
+  
+  let baseColor = isNew ? "#00ff88" : "#00aacc"; // Teal for graph nodes
+  let emissiveIntensity = isNew ? 2 : 0.8;
+  let size = isNew ? 0.25 : 0.12;
+  
+  if (isHighlighted) {
+    baseColor = "#00ffff"; // Cyan for highlighted
+    emissiveIntensity = 3;
+    size = 0.2;
+  } else if (isSimilar) {
+    baseColor = "#00ffaa"; // Teal-green for similar
+    emissiveIntensity = 1.5;
+    size = 0.15;
+  }
+  
   const hoverColor = "#ffffff";
   
-  useFrame((state) => {
+  useFrame((state, delta) => {
     if (meshRef.current) {
-      // Pulse animation for new embedding
-      if (isNew) {
+      // Animate in new nodes
+      if (animateIn && animationProgressRef.current < 1) {
+        animationProgressRef.current = Math.min(1, animationProgressRef.current + delta * 3);
+        const scale = animationProgressRef.current;
+        meshRef.current.scale.setScalar(scale);
+        if (materialRef.current) {
+          materialRef.current.opacity = animationProgressRef.current;
+        }
+      } else if (isHighlighted) {
+        // Pulsing glow for highlighted node
+        const scale = 1.2 + Math.sin(state.clock.elapsedTime * 4) * 0.2;
+        meshRef.current.scale.setScalar(scale);
+      } else if (isSimilar) {
+        // Subtle pulse for similar nodes
+        const scale = 1.05 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+        meshRef.current.scale.setScalar(scale);
+      } else if (isNew && !animateIn) {
         const scale = 1 + Math.sin(state.clock.elapsedTime * 3) * 0.3;
         meshRef.current.scale.setScalar(scale);
+      } else if (!animateIn) {
+        meshRef.current.scale.setScalar(1);
       }
     }
   });
@@ -51,13 +235,30 @@ function GlowingParticle({
       position={position}
       onClick={onClick}
     >
-      <sphereGeometry args={[isNew ? 0.25 : 0.12, 16, 16]} />
+      <sphereGeometry args={[size, 16, 16]} />
       <meshStandardMaterial
+        ref={materialRef}
         color={isHovered ? hoverColor : baseColor}
         emissive={isHovered ? hoverColor : baseColor}
-        emissiveIntensity={isNew ? 2 : 0.8}
+        emissiveIntensity={emissiveIntensity}
         toneMapped={false}
+        transparent={animateIn}
+        opacity={animateIn ? 0 : 1}
       />
+      {isHighlighted && (
+        <mesh>
+          <ringGeometry args={[size * 1.5, size * 1.8, 32]} />
+          <meshStandardMaterial
+            color="#00ffff"
+            emissive="#00ffff"
+            emissiveIntensity={1}
+            side={THREE.DoubleSide}
+            transparent
+            opacity={0.6}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
     </mesh>
   );
 }
@@ -66,12 +267,21 @@ function GlowingParticle({
 function ParticleCloud({
   points,
   is3D,
+  highlightedNodeIndex,
+  similarNodeIndices,
+  onHover,
 }: {
   points: Point[];
   is3D: boolean;
+  highlightedNodeIndex?: number | null;
+  similarNodeIndices?: number[];
+  onHover?: (index: number | null, point: Point | null) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [avatarCache, setAvatarCache] = useState<Map<string, string>>(new Map());
+  const fetchedUserIdsRef = useRef<Set<string>>(new Set());
+  const { raycaster, pointer, camera } = useThree();
   
   const { regularPoints, newPoint } = useMemo(() => {
     const regular = points.filter((p) => !p.is_new);
@@ -79,14 +289,116 @@ function ParticleCloud({
     return { regularPoints: regular, newPoint: newP };
   }, [points]);
 
+  // Filter out highlighted and similar nodes from regular points for instanced rendering
+  const highlightedSet = useMemo(() => {
+    const set = new Set(similarNodeIndices || []);
+    if (highlightedNodeIndex !== null && highlightedNodeIndex !== undefined) {
+      set.add(highlightedNodeIndex);
+    }
+    return set;
+  }, [highlightedNodeIndex, similarNodeIndices]);
+
+  const regularPointsForInstancing = useMemo(() => {
+    return regularPoints.filter((point) => {
+      const pointIndex = points.findIndex(p => p === point);
+      // Exclude highlighted/similar points (they render individually)
+      // Exclude points with user_ids (they render individually)
+      return !highlightedSet.has(pointIndex) && !point.user_id;
+    });
+  }, [regularPoints, highlightedSet, points]);
+
+  // Fetch avatar for a specific user_id when hovering
+  const fetchAvatarForUser = async (user_id: string) => {
+    if (avatarCache.has(user_id) || fetchedUserIdsRef.current.has(user_id)) {
+      return; // Already fetched or fetching
+    }
+    
+    fetchedUserIdsRef.current.add(user_id);
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    
+    try {
+      const response = await fetch(`${apiUrl}/users/${user_id}/avatar`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.profile_image_url) {
+          setAvatarCache(prev => {
+            const newCache = new Map(prev);
+            newCache.set(user_id, data.profile_image_url);
+            return newCache;
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to fetch avatar for user ${user_id}:`, err);
+      fetchedUserIdsRef.current.delete(user_id); // Allow retry on error
+    }
+  };
+
+  // Raycast for hover detection - check all points (including avatar nodes)
+  useFrame(() => {
+    raycaster.setFromCamera(pointer, camera);
+    
+    // Check instanced mesh first
+    let hoveredPointIndex: number | null = null;
+    if (meshRef.current) {
+      const intersects = raycaster.intersectObject(meshRef.current);
+      if (intersects.length > 0) {
+        const instanceId = intersects[0].instanceId;
+        if (instanceId !== undefined && instanceId < regularPointsForInstancing.length) {
+          const hoveredPoint = regularPointsForInstancing[instanceId];
+          const originalIndex = points.findIndex(p => p === hoveredPoint);
+          if (originalIndex !== -1) {
+            hoveredPointIndex = originalIndex;
+          }
+        }
+      }
+    }
+    
+    // Also check individual avatar/particle nodes
+    if (hoveredPointIndex === null) {
+      // Raycast against all points with user_ids or special rendering
+      for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        if (point.user_id || highlightedSet.has(i)) {
+          // Create a temporary object for raycasting
+          const tempPos = new THREE.Vector3(
+            point.x,
+            point.y,
+            is3D && point.z !== null ? point.z : 0
+          );
+          const distance = raycaster.ray.distanceToPoint(tempPos);
+          if (distance < 0.3) { // Within hover distance
+            hoveredPointIndex = i;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Update hover state and fetch avatar if needed
+    if (hoveredPointIndex !== null && hoveredPointIndex !== hoveredIndex) {
+      setHoveredIndex(hoveredPointIndex);
+      const hoveredPoint = points[hoveredPointIndex];
+      onHover?.(hoveredPointIndex, hoveredPoint);
+      
+      // Fetch avatar if this point has a user_id and we don't have it yet
+      if (hoveredPoint.user_id && !avatarCache.has(hoveredPoint.user_id)) {
+        fetchAvatarForUser(hoveredPoint.user_id);
+      }
+    } else if (hoveredPointIndex === null && hoveredIndex !== null) {
+      setHoveredIndex(null);
+      onHover?.(null, null);
+    }
+  });
+
   // Set up instanced mesh positions and colors
   useEffect(() => {
     if (!meshRef.current) return;
 
     const tempObject = new THREE.Object3D();
-    const color = new THREE.Color();
+    const color = new THREE.Color("#00aacc"); // Teal color
 
-    regularPoints.forEach((point, i) => {
+    regularPointsForInstancing.forEach((point, i) => {
       tempObject.position.set(
         point.x,
         point.y,
@@ -94,10 +406,6 @@ function ParticleCloud({
       );
       tempObject.updateMatrix();
       meshRef.current!.setMatrixAt(i, tempObject.matrix);
-
-      // Color gradient based on position
-      const hue = (point.x + 10) / 20; // Map x from [-10,10] to [0,1]
-      color.setHSL(hue * 0.6 + 0.55, 0.8, 0.6);
       meshRef.current!.setColorAt(i, color);
     });
 
@@ -105,62 +413,108 @@ function ParticleCloud({
     if (meshRef.current.instanceColor) {
       meshRef.current.instanceColor.needsUpdate = true;
     }
-  }, [regularPoints, is3D]);
+  }, [regularPointsForInstancing, is3D]);
 
   return (
     <group>
       {/* Instanced mesh for regular points */}
       <instancedMesh
         ref={meshRef}
-        args={[undefined, undefined, regularPoints.length]}
+        args={[undefined, undefined, regularPointsForInstancing.length]}
       >
-        <sphereGeometry args={[0.1, 12, 12]} />
+        <sphereGeometry args={[0.12, 12, 12]} />
         <meshStandardMaterial
           vertexColors
-          emissive="#4488ff"
-          emissiveIntensity={0.5}
+          emissive="#00aacc"
+          emissiveIntensity={0.8}
           toneMapped={false}
         />
       </instancedMesh>
 
-      {/* Special particle for new embedding */}
-      {newPoint && (
-        <GlowingParticle
-          position={[
-            newPoint.x,
-            newPoint.y,
-            is3D && newPoint.z !== null ? newPoint.z : 0,
-          ]}
-          isNew={true}
-          isHovered={false}
-          onClick={() => {}}
-        />
-      )}
+      {/* Avatar nodes for all points with user_ids */}
+      {points.map((point, i) => {
+        if (!point.user_id) return null;
+        
+        const isHighlighted = i === highlightedNodeIndex;
+        const isSimilar = similarNodeIndices?.includes(i) && !isHighlighted;
+        const isNew = point.is_new;
+        const isNewlyAdded = isNew && points.length > 0 && i === points.length - 1;
+        const hasAvatar = point.profile_image_url || avatarCache.has(point.user_id);
+        const avatarUrl = point.profile_image_url || avatarCache.get(point.user_id);
+        
+        // Render avatar node if we have a profile image, otherwise show placeholder
+        if (hasAvatar && avatarUrl) {
+          return (
+            <AvatarNode
+              key={`avatar-${i}-${point.user_id}`}
+              position={[
+                point.x,
+                point.y,
+                is3D && point.z !== null ? point.z : 0,
+              ]}
+              profileImageUrl={avatarUrl}
+              isHovered={hoveredIndex === i}
+              isHighlighted={isHighlighted}
+              isSimilar={isSimilar}
+              onClick={() => {}}
+              animateIn={isNewlyAdded}
+              size={isHighlighted ? 0.2 : isSimilar ? 0.15 : 0.12}
+            />
+          );
+        }
+        
+        // Show placeholder particle while avatar loads
+        return (
+          <GlowingParticle
+            key={`placeholder-${i}-${point.user_id}`}
+            position={[
+              point.x,
+              point.y,
+              is3D && point.z !== null ? point.z : 0,
+            ]}
+            isNew={isNew}
+            isHovered={hoveredIndex === i}
+            isHighlighted={isHighlighted}
+            isSimilar={isSimilar}
+            onClick={() => {}}
+            animateIn={isNewlyAdded}
+          />
+        );
+      })}
+
+      {/* Special particles for highlighted, similar, and new nodes without user_ids */}
+      {points.map((point, i) => {
+        if (point.user_id) return null; // Already handled above
+        
+        const isHighlighted = i === highlightedNodeIndex;
+        const isSimilar = similarNodeIndices?.includes(i) && !isHighlighted;
+        const isNew = point.is_new;
+        const isNewlyAdded = isNew && points.length > 0 && i === points.length - 1;
+        
+        if (isHighlighted || isSimilar || isNew) {
+          return (
+            <GlowingParticle
+              key={`special-${i}-${isNew ? 'new' : 'existing'}`}
+              position={[
+                point.x,
+                point.y,
+                is3D && point.z !== null ? point.z : 0,
+              ]}
+              isNew={isNew && !isHighlighted}
+              isHovered={hoveredIndex === i}
+              isHighlighted={isHighlighted}
+              isSimilar={isSimilar}
+              onClick={() => {}}
+              animateIn={isNewlyAdded}
+            />
+          );
+        }
+        return null;
+      })}
     </group>
   );
 }
 
-// Axis helper with labels
-function AxisLabels({ is3D }: { is3D: boolean }) {
-  return (
-    <group>
-      {/* X axis */}
-      <Text position={[12, 0, 0]} fontSize={0.5} color="#ff4444">
-        X
-      </Text>
-      {/* Y axis */}
-      <Text position={[0, 12, 0]} fontSize={0.5} color="#44ff44">
-        Y
-      </Text>
-      {/* Z axis (only in 3D) */}
-      {is3D && (
-        <Text position={[0, 0, 12]} fontSize={0.5} color="#4444ff">
-          Z
-        </Text>
-      )}
-    </group>
-  );
-}
 
 // Grid floor
 function Grid({ is3D }: { is3D: boolean }) {
@@ -173,18 +527,72 @@ function Grid({ is3D }: { is3D: boolean }) {
   );
 }
 
-// Camera controller
-function CameraController({ is3D }: { is3D: boolean }) {
+// Camera controller with smooth transitions to highlighted node
+function CameraController({ 
+  is3D,
+  targetNodeIndex,
+  points,
+}: { 
+  is3D: boolean;
+  targetNodeIndex?: number | null;
+  points: Point[];
+}) {
   const { camera } = useThree();
+  const targetRef = useRef<THREE.Vector3 | null>(null);
+  const isTransitioningRef = useRef(false);
+  const transitionStartRef = useRef<THREE.Vector3 | null>(null);
+  const transitionProgressRef = useRef(0);
   
   useEffect(() => {
-    if (is3D) {
-      camera.position.set(20, 15, 20);
+    if (targetNodeIndex !== null && targetNodeIndex !== undefined && points[targetNodeIndex]) {
+      const point = points[targetNodeIndex];
+      targetRef.current = new THREE.Vector3(
+        point.x,
+        point.y,
+        is3D && point.z !== null ? point.z : 0
+      );
+      transitionStartRef.current = camera.position.clone();
+      transitionProgressRef.current = 0;
+      isTransitioningRef.current = true;
     } else {
-      camera.position.set(0, 0, 25);
+      targetRef.current = null;
+      isTransitioningRef.current = false;
     }
-    camera.lookAt(0, 0, 0);
+  }, [targetNodeIndex, points, is3D, camera]);
+  
+  useEffect(() => {
+    if (!targetRef.current && !isTransitioningRef.current) {
+      if (is3D) {
+        camera.position.set(20, 15, 20);
+      } else {
+        camera.position.set(0, 0, 25);
+      }
+      camera.lookAt(0, 0, 0);
+    }
   }, [is3D, camera]);
+  
+  useFrame((state, delta) => {
+    if (targetRef.current && isTransitioningRef.current && transitionStartRef.current) {
+      transitionProgressRef.current += delta * 2;
+      
+      if (transitionProgressRef.current >= 1) {
+        // Transition complete, stop interfering
+        const targetPos = targetRef.current.clone();
+        targetPos.add(new THREE.Vector3(0, 0, 15));
+        camera.position.copy(targetPos);
+        camera.lookAt(targetRef.current);
+        isTransitioningRef.current = false;
+      } else {
+        // Smoothly interpolate
+        const targetPos = targetRef.current.clone();
+        targetPos.add(new THREE.Vector3(0, 0, 15));
+        camera.position.lerpVectors(transitionStartRef.current, targetPos, transitionProgressRef.current);
+        const lookAtTarget = targetRef.current.clone();
+        lookAtTarget.lerp(new THREE.Vector3(0, 0, 0), 1 - transitionProgressRef.current);
+        camera.lookAt(lookAtTarget);
+      }
+    }
+  });
 
   return null;
 }
@@ -193,20 +601,35 @@ function CameraController({ is3D }: { is3D: boolean }) {
 function Scene({
   points,
   is3D,
+  highlightedNodeIndex,
+  similarNodeIndices,
+  onHover,
 }: {
   points: Point[];
   is3D: boolean;
+  highlightedNodeIndex?: number | null;
+  similarNodeIndices?: number[];
+  onHover?: (index: number | null, point: Point | null) => void;
 }) {
   return (
     <>
-      <CameraController is3D={is3D} />
+      <CameraController 
+        is3D={is3D} 
+        targetNodeIndex={highlightedNodeIndex}
+        points={points}
+      />
       <ambientLight intensity={0.3} />
       <pointLight position={[10, 10, 10]} intensity={1} />
-      <pointLight position={[-10, -10, -10]} intensity={0.5} color="#4488ff" />
+      <pointLight position={[-10, -10, -10]} intensity={0.5} color="#00aacc" />
       
-      <ParticleCloud points={points} is3D={is3D} />
+      <ParticleCloud 
+        points={points} 
+        is3D={is3D}
+        highlightedNodeIndex={highlightedNodeIndex}
+        similarNodeIndices={similarNodeIndices}
+        onHover={onHover}
+      />
       <Grid is3D={is3D} />
-      <AxisLabels is3D={is3D} />
       
       <OrbitControls
         enableDamping
@@ -232,17 +655,70 @@ function Scene({
 
 export default function EmbeddingVisualizer({
   newEmbedding,
+  newUserInfo,
   onClose,
+  highlightedNodeIndex,
+  similarNodeIndices,
+  hideHeader = false,
+  onPointsUpdate,
+  onAddNewPoint,
+  method: externalMethod,
+  onMethodChange,
 }: EmbeddingVisualizerProps) {
   const [points, setPoints] = useState<Point[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [method, setMethod] = useState<"pca" | "tsne">("pca");
+  const [internalMethod, setInternalMethod] = useState<"pca" | "tsne">("pca");
+  const method = externalMethod ?? internalMethod;
+  const setMethod = (newMethod: "pca" | "tsne") => {
+    if (onMethodChange) {
+      onMethodChange(newMethod);
+    } else {
+      setInternalMethod(newMethod);
+    }
+  };
   const [dimensions, setDimensions] = useState<2 | 3>(3);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [previousEmbedding, setPreviousEmbedding] = useState<number[] | undefined>(undefined);
+  const [hoveredPoint, setHoveredPoint] = useState<{ index: number; point: Point } | null>(null);
+  const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
 
-  const fetchVisualizationData = async () => {
-    setIsProcessing(true);
+  // Handle new embedding dynamically without reload
+  useEffect(() => {
+    if (newEmbedding && newUserInfo && JSON.stringify(newEmbedding) !== JSON.stringify(previousEmbedding)) {
+      if (points.length > 0) {
+        // We have existing points, add the new one dynamically without showing loading
+        fetchVisualizationData(newEmbedding, false, newUserInfo);
+      } else {
+        // No points yet, do initial load with new embedding
+        fetchVisualizationData(newEmbedding, true, newUserInfo);
+      }
+      setPreviousEmbedding(newEmbedding);
+    }
+  }, [newEmbedding, newUserInfo]);
+
+  const handleHover = (index: number | null, point: Point | null) => {
+    if (index !== null && point) {
+      setHoveredPoint({ index, point });
+    } else {
+      setHoveredPoint(null);
+    }
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  const fetchVisualizationData = async (includeNewEmbedding: number[] | null = null, isInitial = false, newUserInfo?: { username: string; user_id: string; profile_image_url?: string }) => {
+    // Only show loading screen on initial load
+    if (isInitial) {
+      setIsProcessing(true);
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -253,7 +729,7 @@ export default function EmbeddingVisualizer({
         body: JSON.stringify({
           method,
           dimensions,
-          include_new_embedding: newEmbedding || null,
+          include_new_embedding: includeNewEmbedding,
         }),
       });
 
@@ -263,18 +739,45 @@ export default function EmbeddingVisualizer({
       }
 
       const data = await response.json();
-      setPoints(data.points);
+      
+      if (isInitial) {
+        // Initial load - set all points
+        setPoints(data.points);
+        onPointsUpdate?.(data.points);
+      } else if (includeNewEmbedding && newUserInfo) {
+        // Adding new point - find the new one and add it with animation
+        const newPoint = data.points.find((p: Point) => p.is_new);
+        if (newPoint) {
+          // Remove is_new from existing points and add the new one with user info
+          const existingPoints = points.map(p => ({ ...p, is_new: false }));
+          const updatedPoints = [...existingPoints, { 
+            ...newPoint, 
+            is_new: true,
+            username: newUserInfo.username,
+            user_id: newUserInfo.user_id,
+            profile_image_url: newUserInfo.profile_image_url
+          }];
+          setPoints(updatedPoints);
+          // Notify parent that points have been updated
+          onPointsUpdate?.(updatedPoints);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
-      setLoading(false);
-      setIsProcessing(false);
+      if (isInitial) {
+        setLoading(false);
+        setIsProcessing(false);
+      }
     }
   };
 
+  // Initial load
   useEffect(() => {
-    fetchVisualizationData();
+    fetchVisualizationData(null, true);
   }, [method, dimensions]);
+
+  // Handle new embedding dynamically - this is handled by parent component now
 
   const newPointCount = points.filter((p) => p.is_new).length;
   const regularPointCount = points.length - newPointCount;
@@ -282,6 +785,7 @@ export default function EmbeddingVisualizer({
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
       {/* Header */}
+      {!hideHeader && (
       <div className="flex items-center justify-between p-4 bg-gray-900/80 backdrop-blur border-b border-gray-800">
         <div className="flex items-center gap-6">
           <h2 className="text-xl font-bold text-white">
@@ -329,13 +833,16 @@ export default function EmbeddingVisualizer({
           </div>
         </div>
 
-        <button
-          onClick={onClose}
-          className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-white transition-colors"
-        >
-          Close
-        </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-white transition-colors"
+          >
+            Close
+          </button>
+        )}
       </div>
+      )}
 
       {/* Canvas */}
       <div className="flex-1 relative">
@@ -354,7 +861,7 @@ export default function EmbeddingVisualizer({
               <p className="text-xl mb-2">Error</p>
               <p>{error}</p>
               <button
-                onClick={fetchVisualizationData}
+                onClick={() => fetchVisualizationData(null, true)}
                 className="mt-4 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-white"
               >
                 Retry
@@ -368,11 +875,18 @@ export default function EmbeddingVisualizer({
           >
             <color attach="background" args={["#000000"]} />
             <fog attach="fog" args={["#000000", 30, 60]} />
-            <Scene points={points} is3D={dimensions === 3} />
+            <Scene 
+              points={points} 
+              is3D={dimensions === 3}
+              highlightedNodeIndex={highlightedNodeIndex}
+              similarNodeIndices={similarNodeIndices}
+              onHover={handleHover}
+            />
           </Canvas>
         )}
 
         {/* Legend */}
+        {!hideHeader && (
         <div className="absolute bottom-4 left-4 bg-gray-900/80 backdrop-blur rounded-lg p-4 text-sm">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-3 h-3 rounded-full bg-blue-500" />
@@ -388,6 +902,26 @@ export default function EmbeddingVisualizer({
             Drag to rotate • Scroll to zoom • Shift+drag to pan
           </div>
         </div>
+        )}
+
+        {/* Hover Tooltip */}
+        {hoveredPoint && mousePosition && (
+          <div
+            className="absolute pointer-events-none z-50 bg-black/80 backdrop-blur-sm border border-white/20 rounded-lg px-3 py-2 text-sm text-white"
+            style={{
+              left: `${mousePosition.x + 10}px`,
+              top: `${mousePosition.y - 10}px`,
+              transform: 'translateY(-100%)',
+            }}
+          >
+            <div className="font-semibold">
+              {hoveredPoint.point.username ? `@${hoveredPoint.point.username}` : `Node ${hoveredPoint.index}`}
+            </div>
+            {hoveredPoint.point.user_id && (
+              <div className="text-xs text-gray-400 mt-1">ID: {hoveredPoint.point.user_id}</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

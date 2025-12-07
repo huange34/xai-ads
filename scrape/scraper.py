@@ -118,7 +118,7 @@ class XAPIScraper:
         """
         endpoint = f"/users/{user_id}"
         params = {
-            "user.fields": "created_at,description,public_metrics"
+            "user.fields": "created_at,description,public_metrics,profile_image_url"
         }
         
         try:

@@ -290,6 +290,9 @@ class VisualizationPoint(BaseModel):
     z: Optional[float] = None
     index: int
     is_new: bool = False
+    user_id: Optional[str] = None
+    username: Optional[str] = None
+    profile_image_url: Optional[str] = None
 
 
 class VisualizationResponse(BaseModel):
@@ -305,7 +308,7 @@ async def get_visualization_data(request: VisualizationRequest):
     """
     Get dimensionality-reduced data for visualization.
     
-    Loads node_features.npy and projects to 2D or 3D using PCA or t-SNE.
+    Loads user_embeddingsv2.npy and projects to 2D or 3D using PCA or t-SNE.
     Optionally includes a new embedding (e.g., from a just-scraped user).
     """
     from sklearn.decomposition import PCA
@@ -314,11 +317,11 @@ async def get_visualization_data(request: VisualizationRequest):
     # Load existing embeddings
     node_features_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "node_features.npy"
+        "user_embeddingsv2.npy"
     )
     
     if not os.path.exists(node_features_path):
-        raise HTTPException(status_code=404, detail="node_features.npy not found")
+        raise HTTPException(status_code=404, detail="user_embeddingsv2.npy not found")
     
     embeddings = np.load(node_features_path)
     num_existing = embeddings.shape[0]
@@ -327,11 +330,20 @@ async def get_visualization_data(request: VisualizationRequest):
     has_new = False
     if request.include_new_embedding:
         new_emb = np.array(request.include_new_embedding).reshape(1, -1)
-        if new_emb.shape[1] != embeddings.shape[1]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"New embedding dimension {new_emb.shape[1]} doesn't match existing {embeddings.shape[1]}"
-            )
+        expected_dim = embeddings.shape[1]
+        
+        # If dimensions don't match, project the new embedding to match
+        if new_emb.shape[1] != expected_dim:
+            if new_emb.shape[1] > expected_dim:
+                # New embedding is larger (e.g., 408-dim) - reduce to match existing (e.g., 128-dim)
+                # Use simple truncation: take first N dimensions
+                # This assumes the existing embeddings were created by taking first N dims of larger embeddings
+                new_emb = new_emb[:, :expected_dim]
+            else:
+                # New embedding is smaller - pad with zeros
+                padding = np.zeros((1, expected_dim - new_emb.shape[1]))
+                new_emb = np.hstack([new_emb, padding])
+        
         embeddings = np.vstack([embeddings, new_emb])
         has_new = True
     
@@ -352,15 +364,34 @@ async def get_visualization_data(request: VisualizationRequest):
     projected = (projected - projected.min(axis=0)) / (projected.max(axis=0) - projected.min(axis=0) + 1e-8)
     projected = projected * 20 - 10  # Scale to [-10, 10]
     
+    # Load node_id_map to get user IDs
+    node_id_map_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "node_id_mapv2.json"
+    )
+    
+    idx_to_user_id = {}
+    if os.path.exists(node_id_map_path):
+        import json
+        with open(node_id_map_path, 'r') as f:
+            node_map = json.load(f)
+        idx_to_user_id = node_map.get("idx_to_user_id", {})
+    
     # Build response points
+    # Note: profile_image_url will be fetched client-side via /users/:id/avatar endpoint
     points = []
     for i in range(projected.shape[0]):
+        user_id_raw = idx_to_user_id.get(str(i))
+        # Convert to string if it exists (JSON may have integers)
+        user_id = str(user_id_raw) if user_id_raw is not None else None
+        
         point = VisualizationPoint(
             x=float(projected[i, 0]),
             y=float(projected[i, 1]),
             z=float(projected[i, 2]) if n_components == 3 else None,
             index=i,
-            is_new=(i >= num_existing)
+            is_new=(i >= num_existing),
+            user_id=user_id
         )
         points.append(point)
     
@@ -370,6 +401,201 @@ async def get_visualization_data(request: VisualizationRequest):
         dimensions=n_components,
         total_points=len(points)
     )
+
+
+# ----- Graph Search Endpoints -----
+
+class GraphSearchRequest(BaseModel):
+    """Request model for searching users in the graph."""
+    handle: str = Field(..., description="X (Twitter) handle (with or without @)")
+
+
+class SimilarUser(BaseModel):
+    """Information about a similar user."""
+    node_index: int
+    user_id: str
+    username: str
+    similarity_score: float
+
+
+class GraphSearchResponse(BaseModel):
+    """Response model for graph search."""
+    found: bool
+    node_index: Optional[int] = None
+    user_id: Optional[str] = None
+    username: Optional[str] = None
+    similar_users: List[SimilarUser] = []
+
+
+@app.post("/graph/search", response_model=GraphSearchResponse)
+async def search_user_in_graph(request: GraphSearchRequest):
+    """
+    Search for a user in the graph by their X handle.
+    
+    Returns the node index if found, along with similar users (neighbors).
+    """
+    import json
+    from sklearn.metrics.pairwise import cosine_similarity
+    
+    if scraper is None:
+        raise HTTPException(
+            status_code=503,
+            detail="X API scraper not initialized."
+        )
+    
+    # Clean handle
+    handle = request.handle.lstrip("@").strip()
+    
+    # Step 1: Get user info from X API to get user_id
+    user_data = scraper.get_user_by_username(handle)
+    if user_data is None:
+        return GraphSearchResponse(found=False, similar_users=[])
+    
+    user_id = str(user_data.get("id"))
+    username = user_data.get("username", handle)
+    
+    # Step 2: Load node_id_map to check if user is in graph
+    node_id_map_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "node_id_mapv2.json"
+    )
+    
+    if not os.path.exists(node_id_map_path):
+        raise HTTPException(status_code=404, detail="Graph data not found")
+    
+    with open(node_id_map_path, 'r') as f:
+        node_map = json.load(f)
+    
+    user_id_to_idx = node_map.get("user_id_to_idx", {})
+    idx_to_user_id = node_map.get("idx_to_user_id", {})
+    
+    # Check if user is in graph
+    if user_id not in user_id_to_idx:
+        return GraphSearchResponse(found=False, similar_users=[])
+    
+    node_index = user_id_to_idx[user_id]
+    
+    # Step 3: Load node features and find similar users
+    node_features_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "user_embeddingsv2.npy"
+    )
+    
+    if not os.path.exists(node_features_path):
+        raise HTTPException(status_code=404, detail="user_embeddingsv2.npy not found")
+    
+    node_features = np.load(node_features_path)
+    
+    # Step 4: Load edge_index to find neighbors
+    edge_index_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "graph",
+        "edge_index.npy"
+    )
+    
+    similar_users = []
+    neighbor_indices = set()
+    
+    if os.path.exists(edge_index_path):
+        edge_index = np.load(edge_index_path)
+        # Find neighbors: edges where this node is the source
+        neighbor_mask = edge_index[0] == node_index
+        neighbor_indices = set(edge_index[1, neighbor_mask].tolist())
+    
+    # If no neighbors from edges, use cosine similarity
+    if not neighbor_indices:
+        # Compute similarity with all nodes
+        user_embedding = node_features[node_index:node_index+1]
+        similarities = cosine_similarity(user_embedding, node_features)[0]
+        
+        # Get top 5 similar (excluding self)
+        top_indices = np.argsort(similarities)[::-1]
+        top_indices = [idx for idx in top_indices if idx != node_index][:5]
+        neighbor_indices = set(top_indices)
+    
+    # Build similar users list
+    for neighbor_idx in list(neighbor_indices)[:5]:  # Limit to 5
+        neighbor_user_id_raw = idx_to_user_id.get(str(neighbor_idx))
+        neighbor_user_id = str(neighbor_user_id_raw) if neighbor_user_id_raw is not None else None
+        if neighbor_user_id:
+            # Try to get username from X API (or use user_id as fallback)
+            neighbor_username = neighbor_user_id  # Fallback
+            try:
+                neighbor_data = scraper.get_user_by_id(neighbor_user_id)
+                if neighbor_data:
+                    neighbor_username = neighbor_data.get("username", neighbor_user_id)
+            except:
+                pass
+            
+            # Compute similarity score
+            user_emb = node_features[node_index:node_index+1]
+            neighbor_emb = node_features[neighbor_idx:neighbor_idx+1]
+            similarity = float(cosine_similarity(user_emb, neighbor_emb)[0, 0])
+            
+            similar_users.append(SimilarUser(
+                node_index=int(neighbor_idx),
+                user_id=neighbor_user_id,
+                username=neighbor_username,
+                similarity_score=similarity
+            ))
+    
+    # Sort by similarity
+    similar_users.sort(key=lambda x: x.similarity_score, reverse=True)
+    
+    return GraphSearchResponse(
+        found=True,
+        node_index=int(node_index),
+        user_id=user_id,
+        username=username,
+        similar_users=similar_users
+    )
+
+
+# ----- Avatar Endpoint -----
+
+class AvatarResponse(BaseModel):
+    """Response model for user avatar."""
+    user_id: str
+    profile_image_url: Optional[str] = None
+    username: Optional[str] = None
+
+
+@app.get("/users/{user_id}/avatar", response_model=AvatarResponse)
+async def get_user_avatar(user_id: str):
+    """
+    Get user avatar/profile image from X API.
+    
+    Uses GET /2/users/:id with user.fields=profile_image_url
+    """
+    if scraper is None:
+        raise HTTPException(
+            status_code=503,
+            detail="X API scraper not initialized."
+        )
+    
+    try:
+        # Use the scraper's get_user_by_id method
+        user_data = scraper.get_user_by_id(user_id)
+        
+        if user_data is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} not found"
+            )
+        
+        profile_image_url = user_data.get("profile_image_url")
+        username = user_data.get("username")
+        
+        return AvatarResponse(
+            user_id=user_id,
+            profile_image_url=profile_image_url,
+            username=username
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch user avatar: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
